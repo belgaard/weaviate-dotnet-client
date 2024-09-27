@@ -1,4 +1,4 @@
-﻿// Copyright (C) 2023 Search Pioneer - https://www.searchpioneer.com
+// Copyright (C) 2023 Search Pioneer - https://www.searchpioneer.com
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
 // you may not use this file except in compliance with the License.
@@ -14,12 +14,114 @@
 
 
 using Xunit;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace SearchPioneer.Weaviate.Client.IntegrationTests.Api.Schema;
 
 [Collection("Sequential")]
 public class SchemaTests : TestBase
 {
+	[Fact]
+	// [How to build an Image Search Application with Weaviate](https://weaviate.io/blog/how-to-build-an-image-search-application-with-weaviate) in .NET
+	public void BuildAnImageSearchApplication()
+	{
+		Client.Schema.DeleteAllClasses();
+
+		ApiResponse<WeaviateClass>? createStatus = Client.Schema.CreateSchemaClassString(DogSchema);
+		Assert.True(createStatus.HttpStatusCode == 200);
+
+		ApiResponse<WeaviateSchema>? schema = Client.Schema.GetSchema();
+		Assert.True(schema.HttpStatusCode == 200);
+		Assert.Single(schema.Result.Classes);
+
+		// Convert sample images to base64
+        const string path =
+            @"C:\UnitySrc\private repos\weaviate-examples\nearest-neighbor-dog-search\flask-app\static\img";
+
+        // Iterate over all files in path
+		string[] files = Directory.GetFiles(path);
+        var requests = new List<WeaviateObject>();
+		foreach (string filePath in files)
+		{
+            var imageArray = File.ReadAllBytes(filePath);
+            var base64ImageRepresentation = Convert.ToBase64String(imageArray);
+			
+            var breed = Path.GetFileNameWithoutExtension(filePath).Replace("-", " ");
+			requests.Add(new WeaviateObject
+            {
+                Class = "Dog",
+                Properties = new Dictionary<string, object>
+                {
+                    { "breed", breed },
+                    { "image", base64ImageRepresentation },
+                    { "filepath", filePath }
+                }
+            });
+		}
+        ApiResponse<ObjectResponse[]>? batch = Client.Batch.CreateObjects(new CreateObjectsBatchRequest(requests.ToArray())
+        {
+            ConsistencyLevel = ConsistencyLevel.One
+        });
+        Assert.True(batch.HttpStatusCode == 200);
+
+		const string searchImagePath = @"C:\UnitySrc\private repos\weaviate-examples\nearest-neighbor-dog-search\flask-app\static\golden-doodle-puppy.jpg";
+        string searchImage = Convert.ToBase64String(File.ReadAllBytes(searchImagePath));
+        GraphGetRequest request = new ()
+        {
+            Class = "Dog", Limit = 2, 
+            Fields = new Field[] {"breed".AsField(), "image".AsField(), "filepath".AsField()}, 
+            NearImage = new NearImage {Image = searchImage}
+        };
+        ApiResponse<GraphResponse>? results = Client.Graph.Get(request);
+        string json = results.Result.Data["Get"]!["Dog"].ToString();
+        var options = new JsonSerializerOptions { PropertyNameCaseInsensitive = true };
+        Dog[] dogs = JsonSerializer.Deserialize<Dog[]>(json, options);
+		Assert.True(dogs.Length == 2);
+        Assert.Multiple(
+            () => Assert.Contains(dogs, dog => dog.Breed == "Goldendoodle"),
+            () => Assert.Contains(dogs, dog => dog.Breed == "Golden Retriever"));
+    }
+
+    public class Dog
+    {
+        public string Breed { get; set; } = null!;
+        public string Image { get; set; } = null!;
+        public string Filepath { get; set; } = null!;
+    }
+	private const string DogSchema = @"
+        {
+           ""class"": ""Dog"",
+           ""description"": ""Images of different dogs"",
+           ""moduleConfig"": {
+               ""img2vec-neural"": {
+                   ""imageFields"": [
+                       ""image""
+                   ]
+               }
+           },
+           ""vectorIndexType"": ""hnsw"",
+           ""vectorizer"": ""img2vec-neural"",
+           ""properties"": [
+               {
+                   ""name"": ""breed"",
+                   ""dataType"": [""string""],
+                   ""description"": ""name of dog breed""
+               },
+               {
+                   ""name"": ""image"",
+                   ""dataType"": [""blob""],
+                   ""description"": ""image""
+               },
+               {
+                   ""name"": ""filepath"",
+                   ""dataType"":[""string""],
+                   ""description"": ""filepath of the images""
+               }
+           ]
+       }
+";
+
 	[Fact]
 	public void CreateBandClass()
 	{
